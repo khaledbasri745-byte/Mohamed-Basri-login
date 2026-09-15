@@ -958,6 +958,7 @@
           'callback': () => {},
           'expired-callback': () => { resetRecaptcha(); }
         });
+        window.recaptchaVerifier.render().catch((e) => console.log("Recaptcha render warning:", e));
       }
     } catch (err) {
       logError("recaptcha_init_err", err);
@@ -1023,7 +1024,11 @@
         return "بيانات الدخول غير صحيحة! البريد الإلكتروني أو كلمة المرور خطأ.";
       case 'auth/account-exists-with-different-credential':
       case 'auth/provider-already-linked':
-        return "رقم الهاتف أو البريد مرتبط حساب آخر بالفعل.";
+        return "رقم الهاتف أو البريد مرتبط بحساب آخر بالفعل.";
+      case 'auth/popup-closed-by-user':
+        return "تم إغلاق نافذة تسجيل الدخول قبل إتمام العملية.";
+      case 'auth/cancelled-popup-request':
+        return "تم إلغاء نافذة تسجيل الدخول السابقة، يرجى المحاولة مرة أخرى.";
       case 'auth/network-request-failed':
         return "فشل الاتصال بالخادم. يرجى التأكد من جودة اتصال الإنترنت.";
       case 'PERMISSION_DENIED':
@@ -1066,7 +1071,7 @@
     }
   }
 
-  // 📩 1. إرسال OTP
+  // 📩 1. إرسال OTP (تم تحسين التحقق وتوليد الكابتشا الآمنة)
   document.getElementById('btn-send-otp').addEventListener('click', async () => {
     if (!checkInternetConnection()) return;
 
@@ -1099,11 +1104,15 @@
     }
 
     try {
-      resetRecaptcha();
       lastOtpRequestTime = Date.now();
       otpAttemptsCount = 0;
       showMessage("جاري إرسال رمز التحقق...");
       
+      // التأكد من توفر وتحديث كابتشا التحقق قبل إرسال الطلب
+      if (!window.recaptchaVerifier) {
+        initRecaptcha();
+      }
+
       phoneConfirmationResult = await signInWithPhoneNumber(
           auth,
           phoneNumber,
@@ -1112,11 +1121,12 @@
       document.getElementById('otp-group').classList.remove('hidden');
       showMessage("تم إرسال رمز التأكيد إلى هاتفك بنجاح.");
     } catch (error) {
+      resetRecaptcha(); // إعادة تعيين الكابتشا في حال حدوث خطأ لمنع تجميد الزر
       showMessage(handleFirebaseError(error), true);
     }
   });
 
-  // 🔑 2. تأكيد الرمز واستخرج Credential
+  // 🔑 2. تأكيد الرمز واستخراج Credential
   document.getElementById('btn-verify-otp').addEventListener('click', async () => {
     if (!checkInternetConnection()) return;
 
@@ -1338,13 +1348,14 @@
     }
   });
 
-  // 🌐 5. الدخول بواسطة Google
+  // 🌐 5. الدخول بواسطة Google (مع معالجة استثناءات الحسابات والنافذة المنبثقة بشكل محسن)
   document.getElementById('btn-google').addEventListener('click', async () => {
     if (!checkInternetConnection()) return;
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
 
     try {
+      showMessage("جاري الاتصال بخدمة Google...");
       const result = await signInWithPopup(auth, provider);
       const user = result.user;
 
@@ -1385,6 +1396,11 @@
       setTimeout(() => openApp(userData), 1000);
 
     } catch (err) {
+      // تجاهل خطأ إغلاق النافذة من قبل المستخدم لكي لا يظهر كخطأ نظام أحمر مزعج
+      if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+        document.getElementById('status-message').classList.add('hidden');
+        return;
+      }
       showMessage(handleFirebaseError(err), true);
     }
   });
